@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         ChatGPT Usage Reset Countdown
 // @namespace    vm-chatgpt-reset-countdown
-// @version      1.0.0
-// @description  Adds “How long before reset” countdown under ChatGPT usage reset timestamps.
-// @match        https://chatgpt.com/codex/cloud/settings/analytics*
+// @version      1.2.0
+// @description  Lightweight reset countdown plus targeted “used” label conversion with minimal CPU overhead.
+// @match        https://chatgpt.com/*
 // @grant        none
 // @run-at       document-idle
 // @author       Zytact
@@ -56,6 +56,45 @@
     return line;
   }
 
+  const USAGE_SELECTORS = [
+    'article.border-token-border-subtle:nth-child(1) > header:nth-child(1) > div:nth-child(2) > span:nth-child(1)',
+    'article.flex:nth-child(2) > header:nth-child(1) > div:nth-child(2) > span:nth-child(1)',
+  ];
+  const REMAINING_LABEL_SELECTORS = [
+    'article.border-token-border-subtle:nth-child(1) > header:nth-child(1) > div:nth-child(2) > span:nth-child(2)',
+  ];
+
+  function toUsedText(valueText) {
+    const match = (valueText || '').match(/(\d+(?:\.\d+)?)\s*%/);
+    if (!match) return null;
+
+    const remaining = Number(match[1]);
+    if (Number.isNaN(remaining)) return null;
+
+    const used = Math.max(0, Math.min(100, 100 - remaining));
+    const usedText = Number.isInteger(used) ? String(used) : used.toFixed(1).replace(/\.0$/, '');
+    return `${usedText}% used`;
+  }
+
+  function convertRemainingToUsed() {
+    for (const selector of REMAINING_LABEL_SELECTORS) {
+      const label = document.querySelector(selector);
+      if (!label) continue;
+      label.textContent = '';
+      label.style.display = 'none';
+    }
+
+    for (const selector of USAGE_SELECTORS) {
+      const el = document.querySelector(selector);
+      if (!el) continue;
+
+      const next = toUsedText(el.textContent || '');
+      if (!next) continue;
+
+      if (el.textContent !== next) el.textContent = next;
+    }
+  }
+
   function discoverResetElements(root = document.body) {
     if (!root) return;
 
@@ -98,32 +137,33 @@
       discoverTimer = null;
       discoverResetElements(root || document.body);
       updateCountdowns();
-    }, 200);
+    }, 300);
   }
 
   const observer = new MutationObserver((mutations) => {
     for (const m of mutations) {
       for (const n of m.addedNodes) {
-        if (n.nodeType === Node.ELEMENT_NODE) {
-          if (n.textContent && /Resets\s+/i.test(n.textContent)) {
-            scheduleDiscover(n);
-            return;
-          }
-        } else if (n.nodeType === Node.TEXT_NODE) {
-          if (n.nodeValue && /Resets\s+/i.test(n.nodeValue)) {
-            scheduleDiscover(m.target);
-            return;
-          }
+        if (n.nodeType === Node.ELEMENT_NODE && n.textContent && /Resets\s+/i.test(n.textContent)) {
+          scheduleDiscover(n);
+          return;
+        }
+        if (n.nodeType === Node.TEXT_NODE && n.nodeValue && /Resets\s+/i.test(n.nodeValue)) {
+          scheduleDiscover(m.target);
+          return;
         }
       }
     }
   });
 
   discoverResetElements();
+  convertRemainingToUsed();
   updateCountdowns();
 
   observer.observe(document.body, { childList: true, subtree: true });
-  setInterval(updateCountdowns, 60_000);
+  setInterval(() => {
+    convertRemainingToUsed();
+    updateCountdowns();
+  }, 2000);
 })();
 
 
